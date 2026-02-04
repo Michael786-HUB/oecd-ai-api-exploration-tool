@@ -1,0 +1,343 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# OECD Research Tool - .gitignore
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔒 SECRETS & API KEYS (CRITICAL - DO NOT COMMIT!)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Streamlit secrets (contains ANTHROPIC_API_KEY)
+.streamlit/secrets.toml
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# API keys and credentials
+*.key
+*.pem
+*.p12
+secrets.py
+config_local.py
+credentials.json
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📊 DATA & OUTPUT FILES
+# ═══════════════════════════════════════════════════════════════════════════
+
+# User-generated query outputs (can be large)
+outputs/
+!outputs/.gitkeep
+
+# Downloaded datasets (can be very large)
+datasets/
+!datasets/.gitkeep
+
+# Large catalog files (keep in repo, but ignore backups)
+data/catalogs/*.backup
+data/catalogs/*_checkpoint.json
+data/catalogs/failed_dsds.json
+data/catalogs/dimension_extraction_log.txt
+data/catalogs/catalog_builder_log.txt
+
+# Processed/temporary data
+data/processed/*
+!data/processed/.gitkeep
+data/raw/*
+!data/raw/.gitkeep
+
+# Summary and temporary files
+summary.txt
+*.tmp
+*.temp
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🐍 PYTHON
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+virtualenv/
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 💻 IDE & EDITOR FILES
+# ═══════════════════════════════════════════════════════════════════════════
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.vim/
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# Eclipse
+.project
+.pydevproject
+.settings/
+
+# NetBeans
+nbproject/
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🖥️  SYSTEM FILES
+# ═══════════════════════════════════════════════════════════════════════════
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🤖 CLAUDE CODE & AI TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Claude Code session data (contains conversation history)
+.claude/
+
+# AI-generated logs
+*.ai.log
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📦 LOGS & DATABASES
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔧 BUILD & PACKAGE MANAGERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# npm
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📝 DOCUMENTATION (Optional - Review these)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Uncomment if you want to ignore internal documentation
+# *_CHANGELOG.md
+# *_GUIDE.md
+# *_DEBUG.md
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🧪 TESTING & TEMPORARY
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Test outputs
+test_output/
+test/
+tests/__pycache__/
+
+# Temporary files
+*.bak
+*.backup
+*.old
+.cache/
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📋 PROJECT-SPECIFIC
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Checkpoint files from catalog builder
+checkpoint.json
+extraction_checkpoint.json
+
+# Archived old scripts (optional - keep for reference)
+# scripts/archive/
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ✅ EXCEPTIONS (Files to ALWAYS track despite patterns above)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Keep example/template files
+!.env.example
+!secrets.example.toml
+
+# Keep important empty directories with .gitkeep
+!**/.gitkeep
+
+# Keep small essential catalog files (< 5MB)
+!data/oecd_dataset_catalog_v2.json
+!data/country_codes.json
+
+# Keep documentation
+!README.md
+!LICENSE
+!CONTRIBUTING.md
