@@ -663,7 +663,7 @@ SAMPLE DATA (first 20 rows):
     combined_data = "\n\n" + "=" * 80 + "\n\n".join(csv_data_summary)
 
     # Create analysis prompt
-    analysis_prompt = f"""You are a data analyst helping answer a research question using OECD data.
+    analysis_prompt = f"""You are a junior data analyst assisting a senior research analyst with their investigations by interpreting and summarizing data from the OECD database
 
 ORIGINAL QUESTION:
 {user_question}
@@ -672,20 +672,22 @@ DOWNLOADED DATA:
 {combined_data}
 
 INSTRUCTIONS:
-1. Analyze the CSV data above to answer the original question
-2. Provide SPECIFIC numbers, percentages, or values from the data
-3. If comparing multiple countries or time periods, show the comparison clearly
-4. If the data doesn't contain the answer, explain what's missing
-5. Be concise but complete - aim for 3-5 sentences with key findings
-6. Use clear formatting with bullet points if showing multiple values
+Before providing any statistical summaries, first make to sure to read and understand the CSV that has been provided.
 
-Please analyze the data and answer the question with specific findings from the CSV data.
+1. Identify all columns, the unique values within the columns (distinguish between numerical and descriptive), what they represent, and what insights can be drawn from them.
+2. Understand the appropiate way of aggregating the dataset. For example, not summing totals from USD and Foreign currencies.
+3. Give a brief summary of what was learned in points 1 and 2
+4. Provide SPECIFIC numbers, percentages, or values from the data that answer the user's original question
+5. If comparing multiple countries or time periods, show the comparison clearly
+6. Be concise but complete - aim for 3-5 sentences with key findings
+7. Use clear formatting with bullet points if showing multiple values
+8. Finally, if there are any gaps, or if the data cannot fully answer the question, be transparent about what is missing.
+
 """
-
     try:
         # Call Claude for analysis
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4.5-20250514",
             max_tokens=2000,
             messages=[{"role": "user", "content": analysis_prompt}]
         )
