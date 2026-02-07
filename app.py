@@ -687,7 +687,7 @@ Before providing any statistical summaries, first make to sure to read and under
     try:
         # Call Claude for analysis
         message = client.messages.create(
-            model="claude-sonnet-4.5-20250514",
+            model="claude-sonnet-4-20250514",
             max_tokens=2000,
             messages=[{"role": "user", "content": analysis_prompt}]
         )
