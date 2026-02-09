@@ -228,58 +228,54 @@ Example #2 —---> “Is there any data on health care spending in Canada”
                   - Format: Always wrap IDs in backticks like `DSD_XXX@DF_YYY`
                   - Double-check: Before recommending, verify the ID exists in the catalog text above
 
-
                RESPONSE FORMAT:
-
 
                [Start with a brief, conversational acknowledgment of their question]
 		  
-               [Then provide your recommendations:]
+               [Then provide a list of datasets that relevent to the query:]
 		
-               I recommend these datasets:
-
+               OECD Datasets that can help answer your question:
 
                1. **Dataset Name** (`EXACT_DATASET_ID_FROM_CATALOG`)
                   - **Category**: [Category name]
                   - **What it offers**: [Detailed explanation of what specific data/insights this provides]
                   - **Why it's relevant**: [How it addresses their question, what they can learn from it]
-                  - **Key features**: [Time coverage, countries included, main indicators, etc.]
-
 
                2. **Dataset Name** (`EXACT_DATASET_ID_FROM_CATALOG`)
                   - **Category**: [Category name]
                   - **What it offers**: [Detailed explanation]
                   - **Why it's relevant**: [Connection to their question]
-                  - **Key features**: [Notable characteristics]
-
 
                [End with a helpful note about how these datasets work together or what analysis they enable]
 
-               IMPORTANT: If the user mentions specific countries or time periods in their question, include special metadata sections at the end of your response:
+               IMPORTANT: If the user mentions specific countries or time periods, you MUST add hidden filter hint comments at the END of your response (after all other content). These help pre-fill the download form:
 
-               <!-- FILTER_HINTS:COUNTRIES=USA,CAN,GBR -->
-               <!-- FILTER_HINTS:START_YEAR=2020 -->
-               <!-- FILTER_HINTS:END_YEAR=2024 -->
-
-               COUNTRY CODES: Use 3-letter ISO codes (USA, CAN, GBR, DEU, FRA, JPN, etc.).
-               Common mappings:
-               - United States/America/US → USA
+               COUNTRY CODES (use ISO 3-letter codes):
+               - United States → USA
                - Canada → CAN
-               - United Kingdom/Britain/UK → GBR
+               - United Kingdom → GBR
                - Germany → DEU
                - France → FRA
                - Japan → JPN
                - Australia → AUS
-               - Mexico → MEX
-               - China → CHN
-               - India → IND
+               - Multiple countries: separate with commas (USA,CAN,GBR)
 
-               TIME PERIODS: Extract start and end years from user queries:
+               TIME PERIODS:
                - "2024 data" → START_YEAR=2024, END_YEAR=2024
                - "2020 to 2023" → START_YEAR=2020, END_YEAR=2023
-               - "since 2015" → START_YEAR=2015, END_YEAR=2024 (current year)
-               - "recent data" → START_YEAR=2020, END_YEAR=2024 (last 5 years)
-               - "last decade" → START_YEAR=2014, END_YEAR=2024
+               - "since 2015" → START_YEAR=2015, END_YEAR=2025
+               - "recent data" → START_YEAR=2020, END_YEAR=2025
+               - "last decade" → START_YEAR=2015, END_YEAR=2025
+
+               FORMAT (add these exact comments at the very end of your response):
+               <!-- FILTER_HINTS:COUNTRIES=USA,CAN -->
+               <!-- FILTER_HINTS:START_YEAR=2020 -->
+               <!-- FILTER_HINTS:END_YEAR=2024 -->
+
+               Example: If user asks "US healthcare spending 2020-2023", end your response with:
+               <!-- FILTER_HINTS:COUNTRIES=USA -->
+               <!-- FILTER_HINTS:START_YEAR=2020 -->
+               <!-- FILTER_HINTS:END_YEAR=2023 -->
 
                Remember: Be warm, engaging, and genuinely helpful - like a knowledgeable colleague who loves talking about data!
                """
@@ -450,15 +446,717 @@ def find_dataset_by_id(catalog, dataset_id):
 
     return None, None
 
+
+# ============================================================================
+# DATAFRAME OPTIMIZATION FUNCTIONS - Reduce token usage for AI analysis
+# ============================================================================
+
+# Columns that should NEVER be dropped - they provide critical context for analysis
+PROTECTED_CONTEXT_COLUMNS = [
+    # Country/geographic identifiers - CRITICAL for knowing what data is about
+    'DONOR', 'Donor',
+    'REF_AREA', 'Reference area', 'Reference Area',
+    'RECIPIENT', 'Recipient',
+    'COUNTRY', 'Country',
+    'LOCATION', 'Location',
+    # Units and currencies
+    'UNIT_MEASURE', 'Unit of measure', 'Unit',
+    'CURRENCY', 'Currency',
+    'UNIT_MULT', 'Unit multiplier',
+    'POWERCODE', 'Power code',
+    # Price context
+    'PRICE_BASE', 'Price base', 'Prices',
+    'BASE_PER', 'Base period',
+    # Measure and flow context
+    'MEASURE', 'Measure',
+    'FLOW_TYPE', 'Flow type', 'Flow',
+    'SECTOR', 'Sector',
+    # Transformations
+    'TRANSFORMATION', 'Transformation'
+]
+
+
+def is_protected_column(col_name):
+    """Check if a column name matches any protected context column."""
+    col_lower = col_name.lower()
+    for protected in PROTECTED_CONTEXT_COLUMNS:
+        if protected.lower() in col_lower or col_lower in protected.lower():
+            return True
+    return False
+
+
+def drop_hardcoded_columns(df):
+    """
+    Drop columns that are known to be unhelpful for analysis.
+    These are typically SDMX structural metadata columns.
+    """
+    columns_to_drop = ['STRUCTURE_NAME', 'STRUCTURE_ID', 'STRUCTURE']
+    existing_cols_to_drop = [col for col in columns_to_drop if col in df.columns]
+
+    if existing_cols_to_drop:
+        df = df.drop(columns=existing_cols_to_drop)
+
+    return df
+
+
+def drop_sdmx_id_columns(df):
+    """
+    Drop columns that contain SDMX identifiers (dataset IDs, agency codes).
+    These columns typically have values like 'DSD_XXX@DF_YYY' or 'OECD'.
+    """
+    cols_to_drop = []
+
+    for col in df.columns:
+        # Sample first non-null values
+        sample_values = df[col].dropna().head(5).astype(str).tolist()
+
+        if not sample_values:
+            continue
+
+        # Check if values look like SDMX IDs
+        sdmx_patterns = 0
+        for val in sample_values:
+            # SDMX dataset IDs contain @ symbol (e.g., DSD_XXX@DF_YYY)
+            if '@' in val and 'DSD' in val.upper():
+                sdmx_patterns += 1
+            # Agency codes are short uppercase strings like OECD, IMF, etc.
+            elif val.isupper() and len(val) <= 10 and val.isalpha():
+                sdmx_patterns += 1
+
+        # If most values match SDMX patterns, drop the column
+        if sdmx_patterns >= len(sample_values) * 0.8:
+            cols_to_drop.append(col)
+
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+
+    return df
+
+
+def drop_single_country_columns(df):
+    """
+    If the dataframe has only one unique country, drop country-related columns.
+    The country name is already known, so these columns add no value.
+
+    EXCEPTION: Protected columns (DONOR, REF_AREA, etc.) are KEPT because they
+    provide critical context for the AI analyst.
+    """
+    # Common country column names
+    country_col_patterns = ['REF_AREA', 'Reference area', 'Reference Area',
+                            'COUNTRY', 'Country', 'country', 'GEO', 'Geo']
+
+    # Find country columns
+    country_cols = [col for col in df.columns
+                    if any(pattern.lower() in col.lower() for pattern in country_col_patterns)]
+
+    if not country_cols:
+        return df
+
+    # Check if there's only one unique country value
+    for col in country_cols:
+        if df[col].nunique() == 1:
+            # Only one country - drop non-protected country columns
+            cols_to_drop = [c for c in df.columns
+                           if any(pattern.lower() in c.lower() for pattern in country_col_patterns)
+                           and not is_protected_column(c)]  # Don't drop protected columns!
+            if cols_to_drop:
+                df = df.drop(columns=cols_to_drop)
+                print(f"Dropped single-country columns: {cols_to_drop}")
+            break
+
+    return df
+
+
+def drop_single_value_columns(df):
+    """
+    Drop columns where all values are identical (only 1 unique value).
+    These columns provide no analytical value.
+
+    EXCEPTION: Protected context columns (UNIT_MEASURE, PRICE_BASE, etc.) are
+    kept even with single values - they provide critical context for analysis.
+    """
+    cols_to_drop = []
+    protected_kept = []
+
+    for col in df.columns:
+        if df[col].nunique() <= 1:
+            # Check if this is a protected context column
+            if is_protected_column(col):
+                protected_kept.append(col)
+                continue  # Don't drop protected columns
+            cols_to_drop.append(col)
+
+    if protected_kept:
+        print(f"Protected single-value columns kept: {protected_kept}")
+
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+
+    return df
+
+
+def normalize_column_name(col_name):
+    """
+    Normalize a column name for comparison.
+    Converts to lowercase and replaces underscores with spaces.
+    """
+    return col_name.lower().replace('_', ' ').strip()
+
+
+def is_id_column(col_name):
+    """
+    Check if a column name looks like an ID column (uppercase with underscores).
+    Examples: UNIT_MEASURE, REF_AREA, FLOW_TYPE
+    """
+    # ID columns are typically all uppercase with underscores
+    if col_name.isupper() and '_' in col_name:
+        return True
+    # Or just all uppercase
+    if col_name.isupper() and len(col_name) > 2:
+        return True
+    return False
+
+
+def is_text_description_column(col_name):
+    """
+    Check if a column name looks like a text description (readable).
+    Examples: "Unit of measure", "Reference Area", "Flow Type"
+    """
+    # Text descriptions have spaces and mixed/title case
+    if ' ' in col_name:
+        return True
+    # Or they're in Title Case without underscores
+    if col_name[0].isupper() and not col_name.isupper() and '_' not in col_name:
+        return True
+    return False
+
+
+def column_has_id_values(df, col):
+    """
+    Check if a column contains ID/code values (short codes, numbers, uppercase).
+
+    ID values look like: "106", "USA", "USD", "ODA_GNI", "TOTAL"
+    Description values look like: "Imputed Multilateral ODA", "United States", "US Dollars"
+
+    Returns True if values appear to be IDs/codes rather than descriptions.
+
+    EXCEPTION: Protected context columns (UNIT_MEASURE, PRICE_BASE, etc.) are
+    never treated as ID columns - their values are critical context even if short.
+    """
+    # Protected columns should never be treated as ID columns
+    if is_protected_column(col):
+        return False
+
+    sample_values = df[col].dropna().head(20).astype(str).tolist()
+
+    if not sample_values:
+        return False
+
+    id_indicators = 0
+    for val in sample_values:
+        val = val.strip()
+
+        # Pure numbers are IDs
+        if val.isdigit():
+            id_indicators += 1
+            continue
+
+        # Short uppercase strings are likely codes (USA, USD, ODA)
+        if len(val) <= 10 and val.isupper() and val.replace('_', '').replace('-', '').isalnum():
+            id_indicators += 1
+            continue
+
+        # Codes with underscores (ODA_GNI, FLOW_TYPE)
+        if '_' in val and val.isupper():
+            id_indicators += 1
+            continue
+
+        # Very short values (1-3 chars) are likely codes
+        if len(val) <= 3 and val.isalnum():
+            id_indicators += 1
+            continue
+
+    # If more than 70% of values look like IDs, it's an ID column
+    return id_indicators >= len(sample_values) * 0.7
+
+
+def column_has_description_values(df, col):
+    """
+    Check if a column contains descriptive text values.
+
+    Description values are longer, have spaces, mixed case, readable text.
+
+    Returns True if values appear to be descriptions rather than IDs.
+    """
+    sample_values = df[col].dropna().head(20).astype(str).tolist()
+
+    if not sample_values:
+        return False
+
+    desc_indicators = 0
+    for val in sample_values:
+        val = val.strip()
+
+        # Contains spaces = likely a description
+        if ' ' in val and len(val) > 5:
+            desc_indicators += 1
+            continue
+
+        # Mixed case with length > 10 = likely a description
+        if len(val) > 10 and not val.isupper() and not val.islower():
+            desc_indicators += 1
+            continue
+
+        # Long lowercase/titlecase strings = descriptions
+        if len(val) > 15:
+            desc_indicators += 1
+            continue
+
+    # If more than 50% of values look like descriptions, it's a description column
+    return desc_indicators >= len(sample_values) * 0.5
+
+
+def find_redundant_column_pairs(df):
+    """
+    Find pairs of columns where one contains ID/code values and the other
+    contains readable text descriptions for the same dimension.
+
+    Examples:
+    - MEASURE (106, 205) vs Measure ("Imputed Multilateral ODA", "Bilateral ODA")
+    - REF_AREA (USA, CAN) vs "Reference Area" ("United States", "Canada")
+
+    Identifies pairs by:
+    1. Matching normalized column names (UNIT_MEASURE ↔ "Unit of measure")
+    2. Checking VALUES to determine which is ID vs description
+
+    ALWAYS keeps the description column and drops the ID column.
+
+    Returns a list of columns to drop (the ID columns, NOT the descriptions).
+    """
+    columns = list(df.columns)
+    normalized_map = {}  # normalized_name -> list of original column names
+
+    for col in columns:
+        normalized = normalize_column_name(col)
+        if normalized not in normalized_map:
+            normalized_map[normalized] = []
+        normalized_map[normalized].append(col)
+
+    cols_to_drop = []
+
+    for normalized, col_list in normalized_map.items():
+        if len(col_list) > 1:
+            # We have columns with matching normalized names
+            # Check VALUES to determine which are IDs vs descriptions
+            id_cols = [c for c in col_list if column_has_id_values(df, c)]
+            desc_cols = [c for c in col_list if column_has_description_values(df, c)]
+
+            # If we have both ID and description columns, DROP the ID columns
+            if desc_cols and id_cols:
+                cols_to_drop.extend(id_cols)
+                print(f"Dropping ID column(s) {id_cols}, keeping description(s) {desc_cols}")
+            # If we can't distinguish by values, fall back to column name heuristics
+            elif len(col_list) > 1:
+                # Prefer columns with spaces in name (more readable)
+                id_by_name = [c for c in col_list if is_id_column(c)]
+                text_by_name = [c for c in col_list if is_text_description_column(c)]
+                if text_by_name and id_by_name:
+                    cols_to_drop.extend(id_by_name)
+                    print(f"Dropping ID column(s) {id_by_name} (by name), keeping {text_by_name}")
+
+    return cols_to_drop
+
+
+def drop_redundant_columns(df):
+    """
+    Drop redundant columns where we have both an ID column and a description column.
+
+    Identifies pairs like:
+    - MEASURE (values: 106, 205) vs Measure (values: "Imputed Multilateral ODA")
+    - REF_AREA (values: USA) vs "Reference Area" (values: "United States")
+
+    Keeps the description column (human-readable text), drops the ID column (codes).
+    """
+    cols_to_drop = find_redundant_column_pairs(df)
+
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+        print(f"Dropped {len(cols_to_drop)} redundant ID columns: {cols_to_drop}")
+
+    return df
+
+
+def get_column_summary(df):
+    """
+    Generate a summary of columns and their unique values for AI to evaluate relevance.
+    Returns a concise string representation.
+    """
+    summary_parts = []
+
+    for col in df.columns:
+        unique_count = df[col].nunique()
+        sample_values = df[col].dropna().unique()[:3]  # First 3 unique values
+        sample_str = ", ".join([str(v)[:30] for v in sample_values])
+        summary_parts.append(f"- {col}: {unique_count} unique values (e.g., {sample_str})")
+
+    return "\n".join(summary_parts)
+
+
+def ai_select_relevant_columns(df, user_question, client):
+    """
+    Use AI to determine which columns are relevant to the user's question.
+    Returns a list of column names to keep.
+    """
+    column_summary = get_column_summary(df)
+
+    prompt = f"""You are analyzing a dataset to answer this question: "{user_question}"
+
+Here are the columns available in the dataset:
+{column_summary}
+
+Which columns are ESSENTIAL to answer this question?
+Consider:
+- Columns containing the actual data/metrics being asked about
+- Columns needed for filtering (countries, time periods, categories)
+- Columns that provide necessary context (units, measures)
+
+Return ONLY a comma-separated list of column names to KEEP. Do not include explanations.
+Example response: TIME_PERIOD, OBS_VALUE, Reference Area, Unit of measure"""
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = message.content[0].text.strip()
+
+        # Parse the response - split by comma and clean up
+        suggested_cols = [col.strip() for col in response_text.split(',')]
+
+        # Validate that suggested columns exist in the dataframe
+        valid_cols = [col for col in suggested_cols if col in df.columns]
+
+        # Always keep OBS_VALUE if it exists (this is typically the main data column)
+        if 'OBS_VALUE' in df.columns and 'OBS_VALUE' not in valid_cols:
+            valid_cols.append('OBS_VALUE')
+
+        # ALWAYS keep protected context columns - they're essential for interpretation
+        for col in df.columns:
+            if is_protected_column(col) and col not in valid_cols:
+                valid_cols.append(col)
+                print(f"AI selection: forcing protected column: {col}")
+
+        # If AI returned nothing useful, keep all columns
+        if len(valid_cols) < 2:
+            return list(df.columns)
+
+        return valid_cols
+
+    except Exception as e:
+        # If AI call fails, return all columns
+        return list(df.columns)
+
+
+def limit_columns(df, max_cols=12):
+    """
+    Limit the dataframe to a maximum number of columns.
+    Prioritizes keeping:
+    1. Protected context columns (UNIT_MEASURE, PRICE_BASE, MEASURE, etc.) - ALWAYS kept
+    2. Descriptive string columns (country names, measure types, indicators)
+    3. Year columns (for time series data)
+    4. Drops ID columns first
+    """
+    if len(df.columns) <= max_cols:
+        return df
+
+    # Categorize columns
+    protected_cols = []  # Protected context columns - ALWAYS keep
+    year_cols = []  # Columns that are years (2020, 2021, etc.)
+    descriptive_cols = []  # String description columns (keep these!)
+    id_cols = []  # ID/code columns (drop these first)
+    other_cols = []
+
+    for col in df.columns:
+        col_str = str(col)
+
+        # Protected context columns always come first
+        if is_protected_column(col_str):
+            protected_cols.append(col)
+        # Year columns (4-digit numbers)
+        elif col_str.isdigit() and len(col_str) == 4:
+            year_cols.append(col)
+        # Descriptive columns: have spaces, mixed case, or known patterns
+        elif ' ' in col_str or (col_str[0].isupper() and not col_str.isupper()):
+            descriptive_cols.append(col)
+        # ID columns: all uppercase
+        elif col_str.isupper() and len(col_str) > 2:
+            id_cols.append(col)
+        else:
+            other_cols.append(col)
+
+    # Build priority order: protected first, then descriptive, then years, then other
+    # Protected columns are ALWAYS kept (never dropped)
+    keep_cols = list(protected_cols)
+
+    # Add descriptive columns
+    slots_remaining = max_cols - len(keep_cols)
+    if slots_remaining > 0:
+        keep_cols.extend(descriptive_cols[:slots_remaining])
+
+    # Add year columns (most recent first)
+    year_cols_sorted = sorted(year_cols, key=lambda x: str(x), reverse=True)
+    slots_for_years = max_cols - len(keep_cols)
+    if slots_for_years > 0:
+        keep_cols.extend(year_cols_sorted[:slots_for_years])
+
+    # If still under limit, add other columns
+    slots_left = max_cols - len(keep_cols)
+    if slots_left > 0:
+        keep_cols.extend(other_cols[:slots_left])
+
+    # Reorder: protected first, then descriptive, then years in chronological order
+    final_cols = [c for c in protected_cols if c in keep_cols]
+    final_cols.extend([c for c in descriptive_cols if c in keep_cols and c not in final_cols])
+    final_cols.extend(sorted([c for c in keep_cols if c in year_cols], key=lambda x: str(x)))
+    final_cols.extend([c for c in keep_cols if c not in final_cols])
+
+    print(f"Column limit: kept {len(final_cols)} cols - {len(protected_cols)} protected, {len([c for c in final_cols if c in descriptive_cols])} descriptive, {len([c for c in final_cols if c in year_cols])} years")
+
+    return df[final_cols]
+
+
+def find_time_column(df):
+    """
+    Find the time period column in the dataframe.
+    Returns the column name or None if not found.
+    """
+    time_patterns = ['TIME_PERIOD', 'Time period', 'Time Period', 'YEAR', 'Year',
+                     'DATE', 'Date', 'PERIOD', 'Period']
+
+    for pattern in time_patterns:
+        if pattern in df.columns:
+            return pattern
+        # Case-insensitive search
+        for col in df.columns:
+            if pattern.lower() == col.lower():
+                return col
+
+    return None
+
+
+def find_value_column(df):
+    """
+    Find the observation/value column in the dataframe.
+    Returns the column name or None if not found.
+    """
+    value_patterns = ['OBS_VALUE', 'Value', 'VALUE', 'Observation value',
+                      'OBSERVATION', 'Observation']
+
+    for pattern in value_patterns:
+        if pattern in df.columns:
+            return pattern
+        for col in df.columns:
+            if pattern.lower() == col.lower():
+                return col
+
+    return None
+
+
+def pivot_dataframe_by_time(df, aggfunc='mean'):
+    """
+    Pivot the dataframe so that time periods become columns.
+
+    Before pivot (many rows):
+        Country | Indicator | TIME_PERIOD | OBS_VALUE
+        USA     | GDP       | 2021        | 100
+        USA     | GDP       | 2022        | 105
+        USA     | GDP       | 2023        | 110
+        CAN     | GDP       | 2021        | 50
+        ...
+
+    After pivot (compact):
+        Country | Indicator | 2021 | 2022 | 2023
+        USA     | GDP       | 100  | 105  | 110
+        CAN     | GDP       | 50   | 52   | 55
+
+    Args:
+        df: The pandas DataFrame to pivot
+        aggfunc: Aggregation function for duplicate values ('mean', 'sum', 'first')
+
+    Returns:
+        Pivoted DataFrame with time periods as columns, or original if pivot fails
+    """
+    time_col = find_time_column(df)
+    value_col = find_value_column(df)
+
+    if not time_col or not value_col:
+        print(f"Pivot skipped: time_col={time_col}, value_col={value_col}")
+        return df
+
+    # Check if we have enough time periods to make pivoting worthwhile
+    unique_times = df[time_col].nunique()
+    if unique_times < 2:
+        print(f"Pivot skipped: only {unique_times} unique time period(s)")
+        return df
+
+    # Identify dimension columns (everything except time and value)
+    dimension_cols = [col for col in df.columns if col not in [time_col, value_col]]
+
+    if not dimension_cols:
+        print("Pivot skipped: no dimension columns found")
+        return df
+
+    try:
+        # Ensure value column is numeric
+        df[value_col] = pd.to_numeric(df[value_col], errors='coerce')
+
+        # Create pivot table
+        pivoted = df.pivot_table(
+            index=dimension_cols,
+            columns=time_col,
+            values=value_col,
+            aggfunc=aggfunc
+        ).reset_index()
+
+        # Flatten column names if they're multi-level
+        if hasattr(pivoted.columns, 'levels'):
+            pivoted.columns = [str(col) if not isinstance(col, tuple) else str(col[-1])
+                              for col in pivoted.columns]
+
+        # Convert ALL column names to strings and clean up format
+        new_cols = []
+        for col in pivoted.columns:
+            col_str = str(col)  # Ensure it's a string first
+            # Clean up numeric-looking column names (e.g., "2021.0" → "2021")
+            if col_str.replace('.', '').replace('-', '').isdigit():
+                if '.' in col_str:
+                    col_str = col_str.split('.')[0]
+            new_cols.append(col_str)
+        pivoted.columns = new_cols
+
+        original_rows = len(df)
+        pivoted_rows = len(pivoted)
+        reduction = ((original_rows - pivoted_rows) / original_rows * 100) if original_rows > 0 else 0
+
+        print(f"Pivot: {original_rows} rows → {pivoted_rows} rows ({reduction:.1f}% reduction)")
+        print(f"Time periods as columns: {unique_times} years")
+
+        return pivoted
+
+    except Exception as e:
+        print(f"Pivot failed: {str(e)}")
+        return df
+
+
+def optimize_dataframe_for_analysis(df, user_question, client=None, use_ai_selection=True, max_columns=12, pivot_by_time=True):
+    """
+    Apply all optimization steps to reduce dataframe size before AI analysis.
+
+    Steps:
+    1. Drop hardcoded unhelpful columns (STRUCTURE_NAME, STRUCTURE_ID, STRUCTURE)
+    2. Drop SDMX ID columns (dataset IDs, agency codes)
+    3. Drop columns with only 1 unique value
+    4. Drop redundant uppercase ID columns (keep text descriptions)
+    5. Drop country columns if only one country is present
+    6. Optionally use AI to select only relevant columns
+    7. Pivot dataframe so time periods become columns (reduces rows significantly)
+    8. Limit columns (prioritizes descriptive text columns over IDs)
+
+    Args:
+        df: The pandas DataFrame to optimize
+        user_question: The user's original question (for AI relevance filtering)
+        client: Anthropic client (optional, needed for AI selection)
+        use_ai_selection: Whether to use AI to filter columns (default True)
+        max_columns: Maximum number of columns to keep (default 12, prioritizes descriptive cols)
+        pivot_by_time: Whether to pivot time periods into columns (default True)
+
+    Returns:
+        Optimized DataFrame with reduced columns and rows
+    """
+    original_cols = len(df.columns)
+    original_rows = len(df)
+
+    # Step 1: Drop hardcoded columns
+    df = drop_hardcoded_columns(df)
+
+    # Step 2: Drop SDMX ID columns (dataset IDs, agency codes)
+    df = drop_sdmx_id_columns(df)
+
+    # Step 3: Drop single-value columns
+    df = drop_single_value_columns(df)
+
+    # Step 4: Drop redundant uppercase columns (keep text descriptions)
+    df = drop_redundant_columns(df)
+
+    # Step 5: Drop country columns if only one country
+    df = drop_single_country_columns(df)
+
+    # Step 6: AI-powered column selection (optional) - do BEFORE pivot
+    if use_ai_selection and client is not None:
+        relevant_cols = ai_select_relevant_columns(df, user_question, client)
+        df = df[relevant_cols]
+
+    # Step 7: Pivot by time period (makes years into columns)
+    if pivot_by_time:
+        df = pivot_dataframe_by_time(df)
+
+    # Step 8: Ensure columns are under the limit
+    if len(df.columns) > max_columns:
+        df = limit_columns(df, max_columns)
+
+    # Log optimization results
+    optimized_cols = len(df.columns)
+    optimized_rows = len(df)
+    col_reduction = ((original_cols - optimized_cols) / original_cols * 100) if original_cols > 0 else 0
+    row_reduction = ((original_rows - optimized_rows) / original_rows * 100) if original_rows > 0 else 0
+
+    print(f"DataFrame optimization: {original_cols} cols → {optimized_cols} cols ({col_reduction:.1f}% reduction)")
+    print(f"DataFrame optimization: {original_rows} rows → {optimized_rows} rows ({row_reduction:.1f}% reduction)")
+
+    return df
+
+
+def estimate_tokens(text):
+    """
+    Estimate the number of tokens in a text string.
+    Uses a rough approximation: ~4 characters per token for English text.
+    For structured data like CSVs, it's closer to ~3 characters per token.
+    """
+    if not text:
+        return 0
+    # Use 3.5 chars/token as a middle ground for CSV data
+    return len(text) / 3.5
+
+
+def estimate_dataframe_tokens(df):
+    """
+    Estimate tokens for a dataframe when converted to string.
+    Returns estimated token count.
+    """
+    df_string = df.to_string(index=False)
+    return estimate_tokens(df_string), len(df_string)
+
+
+def format_token_cost(tokens, cost_per_million=3.0):
+    """
+    Format token count with estimated cost.
+    Default cost is $3/million tokens (Claude Sonnet input pricing).
+    """
+    cost = (tokens / 1_000_000) * cost_per_million
+    return f"{int(tokens):,} tokens (~${cost:.4f})"
+
+
 def generate_query_folder_name(user_question):
     """
     Generate a clean folder name from user question.
-    Format: querysummary_terr_timeperiod_date
+    Format: Countries_Topic_StartYear_EndYear_MMDD
 
     Examples:
-    - "What did US spend on healthcare in 2023?" → "Healthcare_US_2023_01Feb26"
-    - "Compare Canada and Australia GDP" → "GDP_Canada_Australia_01Feb26"
-    - "Youth unemployment trends from 2020 to 2024" → "Youth_Unemployment_2020_2024_01Feb26"
+    - "What did US spend on ODA in 2022 to 2025?" → "US_ODA_2022_2025_0208"
+    - "Compare Canada and US GDP" → "CAN&US_GDP_0208"
+    - "Australia healthcare from 2020 to 2024" → "AUS_Healthcare_2020_2024_0208"
     """
     import re
     from datetime import datetime
@@ -477,7 +1175,15 @@ def generate_query_folder_name(user_question):
         'india': 'IND',
         'italy': 'ITA',
         'spain': 'ESP',
-        'korea': 'KOR', 'south korea': 'KOR'
+        'korea': 'KOR', 'south korea': 'KOR',
+        'brazil': 'BRA',
+        'netherlands': 'NLD',
+        'sweden': 'SWE',
+        'norway': 'NOR',
+        'denmark': 'DNK',
+        'finland': 'FIN',
+        'switzerland': 'CHE',
+        'new zealand': 'NZL'
     }
 
     # Extract countries
@@ -493,37 +1199,42 @@ def generate_query_folder_name(user_question):
 
     # Extract key topic words (remove common words)
     stopwords = {'what', 'did', 'the', 'in', 'on', 'for', 'is', 'are', 'show', 'me', 'data',
-                 'about', 'from', 'to', 'and', 'or', 'of', 'a', 'an', 'how', 'much', 'many', 'have'}
+                 'about', 'from', 'to', 'and', 'or', 'of', 'a', 'an', 'how', 'much', 'many',
+                 'have', 'compare', 'between', 'trends', 'trend', 'over', 'time', 'years'}
     words = re.findall(r'\b[a-z]+\b', question_lower)
-    topic_words = [w.capitalize() for w in words if w not in stopwords and len(w) > 3][:2]
+    # Get topic words, excluding country names
+    country_words = set(country_map.keys())
+    topic_words = [w.capitalize() for w in words
+                   if w not in stopwords and w not in country_words and len(w) > 2][:2]
 
-    # Build folder name: querysummary_terr_timeperiod_date
+    # Build folder name: Countries_Topic_Years_MMDD
     parts = []
 
-    # 1. Query summary (topic words)
-    if topic_words:
-        parts.extend(topic_words)
-
-    # 2. Territories (countries) - limit to 3
+    # 1. Countries first (joined with &) - limit to 3
     if found_countries:
-        parts.extend(found_countries[:3])
+        countries_str = "&".join(found_countries[:3])
+        parts.append(countries_str)
+
+    # 2. Topic description
+    if topic_words:
+        parts.append("_".join(topic_words))
 
     # 3. Time period (year range)
     if years:
         unique_years = sorted(set(years))
         if len(unique_years) == 1:
             parts.append(unique_years[0])
-        elif len(unique_years) == 2:
-            parts.append(f"{unique_years[0]}_{unique_years[1]}")
+        elif len(unique_years) >= 2:
+            parts.append(f"{unique_years[0]}_{unique_years[-1]}")
 
-    # 4. Date (timestamp)
-    timestamp = datetime.now().strftime("%d%b%y")
+    # 4. Date as MMDD
+    timestamp = datetime.now().strftime("%m%d")
     parts.append(timestamp)
 
-    # Join and sanitize
+    # Join with underscore and sanitize
     folder_name = "_".join(parts) if parts else f"Query_{timestamp}"
 
-    # Remove any problematic characters
+    # Remove any problematic characters (keep & for countries)
     folder_name = re.sub(r'[<>:"/\\|?*]', '', folder_name)
 
     # Limit length
@@ -589,11 +1300,10 @@ def update_summary_file(query_folder, user_question, dataset_info=None, analysis
         # Add analysis result if provided
         if analysis_result:
             f.write("\n" + "=" * 80 + "\n")
-            f.write("AI ANALYSIS RESULTS\n")
+            f.write("AI ANALYSIS\n")
             f.write("=" * 80 + "\n")
-            f.write(f"Analysis Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"Question: {user_question}\n\n")
-            f.write(f"Answer:\n{analysis_result}\n")
+            f.write(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"{analysis_result}\n")
             f.write("\n" + "-" * 80 + "\n")
 
         # Add conversation history if provided (only once, at the end)
@@ -617,43 +1327,75 @@ def ai_librarian_analyst(query_folder, user_question, client):
         client: Anthropic client
 
     Returns:
-        Natural language answer with specific data points
+        Tuple of (analysis_result, stats_dict) where stats_dict contains:
+        - total_rows: Total rows across all CSVs
+        - total_cols: Total columns after optimization
+        - char_count: Character count of data
+        - estimated_tokens: Estimated token count
+        - token_cost_str: Formatted token cost string
     """
     # Find all CSV files in the query folder
     csv_files = [f for f in os.listdir(query_folder) if f.endswith('.csv')]
 
     if not csv_files:
-        return "No CSV files found in the query folder. Please download datasets first."
+        return "No CSV files found in the query folder. Please download datasets first.", None
 
     # Read and prepare CSV data
     csv_data_summary = []
+    optimization_report = []
+
+    total_original_rows = 0
+    total_optimized_rows = 0
 
     for csv_file in csv_files:
         csv_path = os.path.join(query_folder, csv_file)
 
         try:
-            # Read CSV
+            # Read the full CSV
             df = pd.read_csv(csv_path)
+            original_shape = df.shape
+            total_original_rows += original_shape[0]
 
-            # Get basic info
-            rows, cols = df.shape
+            # Optimize the dataframe to reduce token usage (includes pivoting)
+            df = optimize_dataframe_for_analysis(
+                df,
+                user_question,
+                client=client,
+                use_ai_selection=True,
+                pivot_by_time=True
+            )
+            optimized_shape = df.shape
+            total_optimized_rows += optimized_shape[0]
 
-            # Get column names
-            columns = df.columns.tolist()
+            # Track optimization stats
+            cols_removed = original_shape[1] - optimized_shape[1]
+            rows_reduced = original_shape[0] - optimized_shape[0]
+            optimization_report.append(
+                f"- {csv_file}: {original_shape[0]:,} → {optimized_shape[0]:,} rows "
+                f"({rows_reduced:,} reduced), {original_shape[1]} → {optimized_shape[1]} cols"
+            )
 
-            # Get sample data (first 20 rows)
-            sample = df.head(20).to_string(index=False)
+            # Save processed dataframe to output folder
+            processed_filename = f"processed_{csv_file}"
+            processed_path = os.path.join(query_folder, processed_filename)
+            df.to_csv(processed_path, index=False)
+            print(f"Saved processed dataframe: {processed_path}")
 
-            # Create summary
+            # Convert optimized dataframe to string
+            df_string = df.to_string(index=False)
+
+            # Create file summary with column info for context
+            # Convert all column names to strings (years become ints after pivot)
+            columns_kept = ", ".join([str(col) for col in df.columns.tolist()])
             file_summary = f"""
-FILE: {csv_file}
-ROWS: {rows:,}
-COLUMNS: {cols}
-COLUMN NAMES: {', '.join(columns)}
+                FILE: {csv_file}
+                ROWS: {len(df):,}
+                COLUMNS: {len(df.columns)} (optimized from {original_shape[1]})
+                COLUMNS KEPT: {columns_kept}
 
-SAMPLE DATA (first 20 rows):
-{sample}
-"""
+                DATA:
+                {df_string}
+                """
             csv_data_summary.append(file_summary)
 
         except Exception as e:
@@ -662,41 +1404,144 @@ SAMPLE DATA (first 20 rows):
     # Combine all CSV summaries
     combined_data = "\n\n" + "=" * 80 + "\n\n".join(csv_data_summary)
 
-    # Create analysis prompt
-    analysis_prompt = f"""You are a junior data analyst assisting a senior research analyst with their investigations by interpreting and summarizing data from the OECD database
+    # Build optimization report string
+    optimization_info = ""
+    if optimization_report:
+        optimization_info = "\n".join(optimization_report)
 
-ORIGINAL QUESTION:
+    # Calculate and display token statistics
+    total_rows = sum([int(s.split("ROWS:")[1].split("\n")[0].strip().replace(",", ""))
+                      for s in csv_data_summary if "ROWS:" in s])
+    total_cols = sum([int(s.split("COLUMNS:")[1].split("(")[0].strip())
+                      for s in csv_data_summary if "COLUMNS:" in s])
+
+    # Estimate tokens for the full prompt
+    prompt_tokens = estimate_tokens(combined_data)
+    char_count = len(combined_data)
+    token_cost_str = format_token_cost(prompt_tokens)
+
+    # Calculate row reduction percentage
+    row_reduction_pct = ((total_original_rows - total_optimized_rows) / total_original_rows * 100) if total_original_rows > 0 else 0
+
+    # Build stats dictionary
+    stats = {
+        "original_rows": total_original_rows,
+        "total_rows": total_rows,
+        "total_cols": total_cols,
+        "char_count": char_count,
+        "estimated_tokens": int(prompt_tokens),
+        "token_cost_str": token_cost_str,
+        "row_reduction_pct": row_reduction_pct,
+        "optimization_report": optimization_report
+    }
+
+    # Print stats to console
+    print("\n" + "=" * 60)
+    print("📊 DATAFRAME ANALYSIS - PRE-SUBMISSION STATS")
+    print("=" * 60)
+    print(f"Original Rows: {total_original_rows:,}")
+    print(f"Optimized Rows: {total_rows:,} ({row_reduction_pct:.1f}% reduction)")
+    print(f"Total Columns: {total_cols}")
+    print(f"Character Count: {char_count:,}")
+    print(f"Estimated Tokens: {token_cost_str}")
+    print("=" * 60 + "\n")
+
+    # Check row limit - don't send datasets larger than 20K rows
+    MAX_ROWS = 20000
+    if total_rows > MAX_ROWS:
+        friendly_msg = f"""📊 **Dataset too large for analysis**
+
+The optimized dataset still contains {total_rows:,} rows, which exceeds the {MAX_ROWS:,} row limit for AI analysis.
+
+**Suggestions to reduce the dataset size:**
+- Select fewer countries (try 1-3 specific countries instead of "All countries")
+- Choose a shorter time period
+- Apply more specific filters when downloading
+
+The raw data has been saved to your output folder if you'd like to analyze it manually."""
+        return friendly_msg, stats
+
+    # Create analysis prompt
+    analysis_prompt = f"""Role: You are a junior data analyst interpreting OECD data on behalf on a senior researcher.
+
+USER QUESTION:
 {user_question}
 
-DOWNLOADED DATA:
+CRITICAL DATA INTERPRETATION RULES:
+1. UNIT_MULT column indicates the multiplier:
+   - UNIT_MULT = 6 means values are in MILLIONS (multiply displayed value by 1,000,000)
+   - UNIT_MULT = 0 means values are ratios/percentages (use as-is)
+
+2. NUMBER FORMATTING - Convert to readable billions/millions:
+   - If UNIT_MULT=6 and value=15200, report as "$15.2 billion" (not "15,200 million")
+   - If UNIT_MULT=6 and value=850, report as "$850 million"
+   - If UNIT_MULT=0 and value=0.33, report as "0.33%" or "33%"
+
+3. COLUMN USAGE - Use descriptive columns, NOT codes:
+   - Use "Measure" or "Flow type" text values, NOT numeric codes like "1140" or "1010"
+   - Use country names from "Reference area" column, NOT codes like "GBR" or "DEU"
+   - If descriptive column is missing, describe what the measure represents
+
+{optimization_info}
+
+DATA:
 {combined_data}
 
-INSTRUCTIONS:
-Before providing any statistical summaries, first make to sure to read and understand the CSV that has been provided.
+Format your response using the outline below:
 
-1. Identify all columns, the unique values within the columns (distinguish between numerical and descriptive), what they represent, and what insights can be drawn from them.
-2. Understand the appropiate way of aggregating the dataset. For example, not summing totals from USD and Foreign currencies.
-3. Give a brief summary of what was learned in points 1 and 2
-4. Provide SPECIFIC numbers, percentages, or values from the data that answer the user's original question
-5. If comparing multiple countries or time periods, show the comparison clearly
-6. Be concise but complete - aim for 3-5 sentences with key findings
-7. Use clear formatting with bullet points if showing multiple values
-8. Finally, if there are any gaps, or if the data cannot fully answer the question, be transparent about what is missing.
+**Data Overview**
+Describe what data, time period, number of observations that were found
+
+**Key Findings**
+
+• [Finding with properly formatted number - e.g., "$15.2 billion" not "15200 million"]
+
+• [Finding with properly formatted number]
+
+• [Finding with properly formatted number]
+
+• [Finding with properly formatted number]
+
+**Limitations & Context**
+One sentence about data caveats.
+
+**What the Data Shows**
+2-3 sentences with key insight.
+
+Rules:
+Format your response with an emphasis on clear, consise, and readable language. Below are examples that can help:
+
+- Convert millions to billions when value >= 1000 (e.g., 15200 million = $15.2 billion)
+- Use the correct currency symbol when providing values
+- Never write "X million million" or "X,XXX million" - convert to billions
+- Try to keep bullets SHORT
 
 """
+
     try:
         # Call Claude for analysis
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=2000,
-            messages=[{"role": "user", "content": analysis_prompt}]
+            messages=[{"role": "user", "content": analysis_prompt}],
+            temperature=0.2
         )
 
         response_text = message.content[0].text
-        return response_text
+
+        return response_text, stats
 
     except Exception as e:
-        return f"Error during AI analysis: {str(e)}"
+        error_msg = str(e).lower()
+        # Provide user-friendly error messages
+        if 'rate' in error_msg or 'limit' in error_msg or 'quota' in error_msg:
+            friendly_msg = "⏳ The API is temporarily busy. Please wait a moment and try again."
+        elif 'timeout' in error_msg or 'connection' in error_msg:
+            friendly_msg = "🔌 Connection issue. Please check your internet and try again."
+        else:
+            friendly_msg = "📊 The analysis request couldn't be completed. Try removing some filters or selecting fewer countries to reduce the dataset size."
+        return friendly_msg, stats
+
 
 def render_dataset_details(category, dataset_id, dataset_meta):
     """Render dataset details and download interface"""
@@ -897,11 +1742,13 @@ def render_dataset_details(category, dataset_id, dataset_meta):
         # Only show frequency filter in legacy mode
         if not dimensions:
             if use_freq:
+                freq_options = [None, "A", "Q", "M"]
+                freq_labels = {None: "All frequencies", "A": "Annual", "Q": "Quarterly", "M": "Monthly"}
                 freq = st.selectbox(
                     "Frequency:",
-                    options=["A", "Q", "M"],
-                    format_func=lambda x: {"A": "Annual", "Q": "Quarterly", "M": "Monthly"}[x],
-                    index=0,
+                    options=freq_options,
+                    format_func=lambda x: freq_labels[x],
+                    index=0,  # Default to "All frequencies"
                     key=f"freq_{dataset_id}"
                 )
             else:
@@ -992,8 +1839,14 @@ def render_dataset_details(category, dataset_id, dataset_meta):
                 try:
                     # Ensure query folder exists
                     if "current_query" not in st.session_state or not st.session_state.current_query:
-                        # Initialize query if not exists
-                        user_question = st.session_state.messages[-1]["content"] if st.session_state.messages else "Data Query"
+                        # Initialize query if not exists - find the LAST USER message, not the last message
+                        user_question = "Data Query"
+                        if st.session_state.messages:
+                            # Find the most recent user message
+                            for msg in reversed(st.session_state.messages):
+                                if msg.get("role") == "user":
+                                    user_question = msg["content"]
+                                    break
                         folder_name = generate_query_folder_name(user_question)
 
                         # Use custom base directory from settings
@@ -1021,25 +1874,30 @@ def render_dataset_details(category, dataset_id, dataset_meta):
 
                     # Build dimension filter string from user inputs
                     dim_filter = None
+                    filter_str = "all"
+
+                    # Debug output (to terminal)
+                    print(f"DEBUG: dimensions={len(dimensions) if dimensions else 0}, dimension_values={dimension_values}, country_filter={country_filter}")
+
                     if dimension_values:
                         # Sort dimensions by position and create dot-separated string
                         sorted_positions = sorted(dimension_values.keys())
                         dim_parts = [dimension_values[pos] for pos in sorted_positions]
                         dim_filter = ".".join(dim_parts)
+                        filter_str = dim_filter
+
+                        # Check if filter has any actual values (not all empty)
+                        has_values = any(part.strip() for part in dim_parts)
+                        if not has_values:
+                            dim_filter = None  # Use 'all' if no values specified
+                            filter_str = "all"
+
+                        print(f"DEBUG: Built dim_filter={dim_filter}, has_values={has_values}")
 
                     # Build API URL for summary
                     BASE_URL = "https://sdmx.oecd.org/public/rest/data"
                     agency = dataset_meta['agency']
                     version = dataset_meta.get('version', '1.0')
-
-                    if dimensions and dimension_values:
-                        sorted_positions = sorted(dimension_values.keys())
-                        dim_parts = [dimension_values[pos] if dimension_values[pos] else "" for pos in sorted_positions]
-                        filter_str = ".".join(dim_parts)
-                    else:
-                        country_param = country_filter if country_filter else ""
-                        freq_param = freq if freq else ""
-                        filter_str = f"{country_param}.{freq_param}......"
 
                     api_url = (
                         f"{BASE_URL}/{agency},{dataset_id},{version}/"
@@ -1048,25 +1906,57 @@ def render_dataset_details(category, dataset_id, dataset_meta):
                         f"&dimensionAtObservation=AllDimensions&format=csvfile"
                     )
 
-                    # Call the API
+                    # Show what filter is being applied
+                    if dim_filter:
+                        st.caption(f"🔍 API Filter: `{dim_filter}`")
+                    elif country_filter:
+                        st.caption(f"🔍 Post-download filter: countries={country_filter}")
+                    else:
+                        st.caption("🔍 No filter applied - fetching all data")
+
+                    # Call the API (with dimension count validation if available)
+                    expected_dims = dataset_meta.get('dimension_count', None)
+
+                    # Determine what to pass for countries/freq
+                    # In legacy mode (no dimensions), use country_filter for post-download filtering
+                    countries_param = country_filter if not dimensions else None
+                    freq_param = freq if not dimensions else None
+                    print(f"DEBUG: Passing to get_dataset: dim_filter={dim_filter}, countries={countries_param}, freq={freq_param}")
+
                     df = fetcher.get_dataset(
                         agency=dataset_meta['agency'],
                         dataset_id=dataset_id,
                         version=dataset_meta.get('version', '1.0'),
                         dimension_filter=dim_filter,
-                        countries=country_filter if not dimensions else None,
-                        freq=freq if not dimensions else None,
+                        countries=countries_param,
+                        freq=freq_param,
                         start_date=start_date,
                         end_date=end_date,
-                        save_csv=True
+                        save_csv=True,
+                        expected_dimensions=expected_dims
                     )
 
-                    # Build filename
+                    # Build filename - extract country info from dimension values or legacy filter
                     country_suffix = ""
-                    if country_filter:
-                        country_count = len(country_filter.split("+"))
+                    countries_used = None
+
+                    # Check dimension-aware mode first (REF_AREA in dimensions)
+                    if dimensions and dimension_values:
+                        for dim in dimensions:
+                            if dim.get('id') == 'REF_AREA':
+                                pos = dim.get('position')
+                                if pos is not None and pos in dimension_values and dimension_values[pos]:
+                                    countries_used = dimension_values[pos]
+                                    break
+
+                    # Fall back to legacy country filter
+                    if not countries_used and country_filter:
+                        countries_used = country_filter
+
+                    if countries_used:
+                        country_count = len(countries_used.split("+"))
                         if country_count <= 3:
-                            country_suffix = f"_{country_filter.replace('+', '_')}"
+                            country_suffix = f"_{countries_used.replace('+', '_')}"
                         else:
                             country_suffix = f"_{country_count}countries"
 
@@ -1185,22 +2075,20 @@ def main():
     # Initialize API counter
     init_api_counter()
 
-    st.title("📊 OECD Data AI Librarian")
-
-    # Show API counter at the top
-    show_api_counter()
+    st.title("📊 OECD Data Explorer")
+    st.caption("Download datasets from OECD and get AI-powered statistical summaries")
     st.markdown("---")
 
     # Load catalog
     catalog = load_catalog()
-    
+
     # Create tabs
-    tab1, tab2 = st.tabs(["🤖 AI Librarian", "📚 Browse Datasets"])
-    
+    tab1, tab2 = st.tabs(["🤖 Ask & Analyse", "📚 Browse Datasets"])
+
     # ========== TAB 1: AI LIBRARIAN ==========
     with tab1:
-        st.markdown("### Ask the AI Librarian")
-        st.markdown("Describe what data you're looking for, and I'll help you find the perfect datasets. Feel free to ask follow-up questions!")
+        st.markdown("### What data are you looking for?")
+        st.markdown("Describe your question and I'll help you find, download, and analyze the relevant OECD datasets.")
 
         # Initialize chat history and dataset IDs in session state
         if "messages" not in st.session_state:
@@ -1216,62 +2104,43 @@ def main():
 
         # Show welcome message and instructions if chat is empty
         if len(st.session_state.messages) == 0:
-            st.markdown("### 👋 Welcome to OECD Data AI Research Assistant!")
+            st.markdown("### 👋 Welcome!")
 
             st.info("""
-            **Hello, I am your AI-powered research assistant** that helps you find, download, and analyze OECD data with specific answers to your questions.
+            **This tool downloads datasets from the OECD database and reads statistical summaries from them.**
+
+            Ask a question → Download the data → Get AI-powered insights with specific numbers.
             """)
 
             # Instructions
-            with st.expander("📖 How to Use This Tool", expanded=True):
+            with st.expander("📖 How It Works", expanded=True):
                 st.markdown("""
-                ### Complete Research Workflow
+                ### Three Simple Steps
 
-                **Step 1: Ask Your Question** 🤔
-                - Be specific about countries, time periods, and metrics and what data you're looking for.
+                1. Ask Your Question 🤔
+                - Describe what data you need and what question you're trying to answer. Be specifc in your query (countries, time periods, metrics). This will help the AI recommend the right datasets and filters.
                 - Examples:
-                  - "What was US healthcare and foreign aid spending in 2023?"
-                  - "Compare youth unemployment in Canada, Australia, and UK from 2020 to 2024 relative to their GNI index"
-                  - "I am looking for data on GDP growth and inflation rates in Japan and Canada between 2023 and 2024"
+                  - "US healthcare and ODA spending in 2023"
+                  - "Compare youth unemployment in Canada and UK from 2020-2024"
+                  - "GDP growth in Japan and Germany"
 
-                **Step 2: Download Dataset** 📥
-                - I'll recommend relevant datasets that available in the OECD websitee
-                - Click "Download Dataset" to save data to a query-specific folder
-                - For me to read and analyse the datasets, they need to be exported. Choose a file location on the left-hand side
-                - Note: Each dataset download counts as 1 API request. OECD allows 60 downloads per hour
-                       
-                **Step 3: Analyze Data** 🔬
-                - After downloading, click "Analyse Data"
-                - I'll read the CSV and provide specific answers with numbers
-                - Results will be saved to summary.txt within the folder specified in Step 2, so you can save the results for later :)
-                            
-                IMPORTANT: AI MAY OCCASIONALLY HALLUCINATE AND MAKE THINGS UP :/
-                If a dataset can't be exported, its possible the filters you selected don't have data (for example, if you put 2024 as the year, but the dataset selected is limited to 2023 only)
+                2. Download Data 📥
+                - The AI will recommend relevant datasets from the OECD datasets
+                - Click "Download Dataset" to export the data as CSV files to your selected folder
+
+                3. Analyse 🔬
+                - Click "Analyze Data" to get insights
+                - I'll read the data and answer your question with specific numbers
+                - Results are saved to your output folder
 
                 ---
 
                 ### Tips for Best Results
+                - Be specific: mention countries and time periods
+                - Select 1-3 countries and smaller time frames for faster analysis (avoid do "All countries")
+                - If the download fails, try again by removing all the filters
 
-                ✅ **DO:**
-                - Mention specific countries (US, UK, Canada, Japan, Australia, etc.)
-                - Specify time periods ("2023", "2020 to 2024", "since 2015")
-                - Focus on major economies for faster, smaller datasets
-                - Ask follow-up questions to refine your search
-
-                ❌ **AVOID:**
-                - Vague questions without countries or timeframes
-                - Requesting data from obscure countries (unless needed)
-                - Very broad time ranges (increases data size)
-
-                ---
-
-                ### Where Your Data is Saved
-
-                Each query creates a new folder:
-                - **Format:** `TopicName_Countries_TimeRange_Date`
-                - **Example:** `Healthcare_US_2023_01Feb26`
-                - **Contains:** CSV files + summary.txt with API URLs & analysis
-                - **Location:** Check sidebar to set your preferred folder location ➡️
+                ⚠️ *AI analysis is a helpful starting point but always verify important findings.*
                 """)
 
             # Quick start examples
@@ -1385,14 +2254,13 @@ def main():
 
             st.markdown("---")
 
-            # API counter info
-            st.markdown("**API Usage**")
-            st.caption(f"Requests: {st.session_state.api_counter}/60 per hour")
-        
-        # Display chat history
+        # Display chat history (strip internal hints from display)
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
-                st.markdown(message["content"])
+                # Remove FILTER_HINTS comments before displaying
+                display_content = message["content"]
+                display_content = re.sub(r'<!--\s*FILTER_HINTS:[^>]+-->\s*', '', display_content)
+                st.markdown(display_content.strip())
         
         # Chat input
         if prompt := st.chat_input("Ask me anything about OECD data... (e.g., 'What data do you have on healthcare spending?')"):
@@ -1570,7 +2438,7 @@ def main():
                     st.error(f"❌ Dataset {idx + 1}/{total_datasets}: `{dataset_id}` not found in catalog")
                     st.warning(f"The AI suggested `{dataset_id}` but it doesn't exist in our current catalog.")
 
-            # Show "Analyze Data" button if datasets have been downloaded
+            # Show "Analyse Data" button if datasets have been downloaded
             if st.session_state.current_query and st.session_state.current_query.get("datasets"):
                 st.markdown("---")
                 num_datasets = len(st.session_state.current_query["datasets"])
@@ -1580,14 +2448,40 @@ def main():
                     st.markdown(f"### 🔬 Data Analysis")
                     st.info(f"📊 **{num_datasets} dataset(s) downloaded** and ready for analysis")
                 with col2:
-                    if st.button("✨ Analyze Data", type="primary", use_container_width=True, key="analyze_button"):
+                    if st.button("✨ Read Exports", type="primary", use_container_width=True, key="analyze_button"):
                         with st.spinner("🤖 AI analyzing your data..."):
                             client = anthropic_client()
                             query_folder = st.session_state.current_query["folder_path"]
                             question = st.session_state.current_query["question"]
 
-                            # Call AI analyst
-                            analysis_result = ai_librarian_analyst(query_folder, question, client)
+                            # Call AI analyst (returns tuple of result and stats)
+                            analysis_result, analysis_stats = ai_librarian_analyst(query_folder, question, client)
+
+                            # Display token/optimization stats
+                            if analysis_stats:
+                                st.markdown("#### 📈 Data Optimization Stats")
+                                col_a, col_b, col_c, col_d = st.columns(4)
+                                with col_a:
+                                    # Show row reduction with delta
+                                    original = analysis_stats.get('original_rows', analysis_stats['total_rows'])
+                                    optimized = analysis_stats['total_rows']
+                                    delta = optimized - original if original != optimized else None
+                                    st.metric("Rows", f"{optimized:,}", delta=f"{delta:,}" if delta else None)
+                                with col_b:
+                                    st.metric("Columns", analysis_stats['total_cols'])
+                                with col_c:
+                                    st.metric("Est. Tokens", f"{analysis_stats['estimated_tokens']:,}")
+                                with col_d:
+                                    reduction = analysis_stats.get('row_reduction_pct', 0)
+                                    st.metric("Data Reduction", f"{reduction:.0f}%")
+
+                                st.caption(f"💰 Approx. cost: {analysis_stats['token_cost_str']}")
+
+                                # Show optimization details
+                                if analysis_stats.get('optimization_report'):
+                                    with st.expander("🔧 Optimization Details", expanded=False):
+                                        for report_line in analysis_stats['optimization_report']:
+                                            st.text(report_line)
 
                             # Display result in chat
                             with st.chat_message("assistant"):
@@ -1614,18 +2508,11 @@ def main():
                             st.success(f"✅ Analysis complete! Results saved to `{st.session_state.current_query['folder_name']}/summary.txt`")
                             st.rerun()
 
-                # Show summary info
-                st.markdown("**Query Details:**")
-                st.code(f"Question: {st.session_state.current_query['question']}")
-                st.code(f"Folder: {st.session_state.current_query['folder_name']}")
-
-                # List downloaded datasets
+                # Show downloaded datasets (collapsed)
                 with st.expander("📁 Downloaded Datasets", expanded=False):
+                    st.caption(f"Saved to: `{st.session_state.current_query['folder_name']}`")
                     for i, ds in enumerate(st.session_state.current_query["datasets"]):
-                        st.markdown(f"**{i+1}. {ds['name']}**")
-                        st.text(f"   File: {ds['filename']}")
-                        st.text(f"   Rows: {ds['rows']:,}")
-                        st.text(f"   Downloaded: {ds['timestamp']}")
+                        st.markdown(f"**{i+1}. {ds['name']}** ({ds['rows']:,} rows)")
 
     # ========== TAB 2: BROWSE DATASETS ==========
     with tab2:

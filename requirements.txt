@@ -8,6 +8,7 @@ anthropic>=0.18.0
 # Data Processing
 pandas>=2.0.0
 requests>=2.31.0
+pandasai>=2.0.0
 
 # Additional Standard Library (included with Python, listed for reference)
 # - json
